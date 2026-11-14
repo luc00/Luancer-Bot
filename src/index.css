@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --brand-sage-light: #eef4f0;
+    --brand-sage-surface: #f7faf8;
+    --brand-sage-card: #ffffff;
+    --brand-sage-border: #ccdcd2;
+    --brand-sage-muted: #5e776a;
+    --brand-sage-dark: #263e34;
+    --brand-sage-deep: #16221d;
+    --brand-accent-gold: #9e7d53;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    background-color: #eef4f0;
+    color: #16221d;
+  }
+
+  h1, h2, .font-editorial {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+  }
+}
+
+.font-serif-brand {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+}
+
+.font-sans-brand {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+.font-mono-brand {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom delicate scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #eef4f0;
+}
+::-webkit-scrollbar-thumb {
+  background: #bad0c4;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8faea0;
+}
+
+/* Hides Framer branding elements when rendered in same-origin context */
+#__framer-badge-container,
+.__framer-badge,
+[data-framer-badge] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Allows pointer/touch pass-through to fixed background while keeping UI controls clickable */
+.pointer-pass-foreground {
+  pointer-events: none;
+}
+
+.pointer-pass-foreground header,
+.pointer-pass-foreground footer,
+.pointer-pass-foreground button,
+.pointer-pass-foreground a,
+.pointer-pass-foreground input,
+.pointer-pass-foreground select,
+.pointer-pass-foreground textarea,
+.pointer-pass-foreground label,
+.pointer-pass-foreground [role="button"],
+.pointer-pass-foreground form,
+.pointer-pass-foreground table,
+.pointer-pass-foreground .overflow-y-auto,
+.pointer-pass-foreground .z-50,
+.pointer-pass-foreground [class*="cursor-pointer"] {
+  pointer-events: auto;
+}
+

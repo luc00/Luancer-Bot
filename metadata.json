@@ -1,0 +1,6 @@
+{
+  "name": "Luancer & Co. — Bot Aziendali Autonomi",
+  "description": "Piattaforma artigianale per la creazione di bot AI aziendali su misura senza codice, analisi delle performance in tempo reale e integrazione con software gestionali.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,186 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    // 3. Entity Validation Blueprints (Anti-Update-Gap)
+    function isValidUserPublicProfile(data, expectedUid) {
+      return data.keys().hasAll(['uid', 'displayName', 'companyName', 'activePlanId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'companyName', 'activePlanId', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && isValidId(data.uid)
+        && data.uid == expectedUid
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 100
+        && data.companyName is string
+        && data.companyName.size() >= 1
+        && data.companyName.size() <= 120
+        && data.activePlanId is string
+        && data.activePlanId in ['artigiano', 'atelier', 'corporate', 'su_misura', 'all_in_one']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateInfo(data, expectedUid) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'vatNumber', 'createdAt', 'updatedAt'])
+        && data.uid is string
+        && isValidId(data.uid)
+        && data.uid == expectedUid
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 160
+        && (!('vatNumber' in data) || (data.vatNumber is string && data.vatNumber.size() >= 2 && data.vatNumber.size() <= 32))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBotCustomizationPreset(data, expectedOwnerId) {
+      return data.keys().hasAll([
+          'ownerId', 'botCode', 'name', 'bundleType', 'finishId',
+          'autonomyLevel', 'selectedEmployees', 'customDirectives', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'botCode', 'name', 'bundleType', 'finishId',
+          'autonomyLevel', 'selectedEmployees', 'customDirectives', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string
+        && isValidId(data.ownerId)
+        && data.ownerId == expectedOwnerId
+        && data.botCode is string
+        && data.botCode.size() >= 2
+        && data.botCode.size() <= 40
+        && data.botCode.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string
+        && data.name.size() >= 2
+        && data.name.size() <= 120
+        && data.bundleType is string
+        && data.bundleType in ['all_in_one', 'modular']
+        && data.finishId is string
+        && data.finishId in ['sage_brass', 'charcoal_titanium', 'brushed_gold', 'ivory_ceramic']
+        && data.autonomyLevel is string
+        && data.autonomyLevel in ['supervisionato', 'semi-autonomo', 'piena-autonomia']
+        && data.selectedEmployees is list
+        && data.selectedEmployees.size() >= 1
+        && data.selectedEmployees.size() <= 6
+        && data.selectedEmployees[0] is string
+        && data.selectedEmployees.hasOnly(['emp-1', 'emp-2', 'emp-3', 'emp-4', 'emp-5', 'emp-6'])
+        && data.customDirectives is string
+        && data.customDirectives.size() <= 2000
+        && data.status is string
+        && data.status in ['attivo', 'in_pausa']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPublicProfile(incoming(), request.auth.uid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPublicProfile(incoming(), request.auth.uid)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'companyName', 'activePlanId', 'updatedAt']);
+
+      allow delete: if false;
+
+      // Isolated PII subcollection
+      match /private/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && docId == 'info' && isOwner(userId);
+        allow list: if false;
+
+        allow create: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'info'
+          && isOwner(userId)
+          && isValidUserPrivateInfo(incoming(), request.auth.uid)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isValidId(userId)
+          && isValidId(docId)
+          && docId == 'info'
+          && isOwner(userId)
+          && isValidUserPrivateInfo(incoming(), request.auth.uid)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'vatNumber', 'updatedAt']);
+
+        allow delete: if false;
+      }
+
+      // Personalized Paid Bot Configurations
+      match /botConfigs/{botConfigId} {
+        allow get: if isValidId(userId) && isValidId(botConfigId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isValidId(userId)
+          && isValidId(botConfigId)
+          && isOwner(userId)
+          && isValidBotCustomizationPreset(incoming(), request.auth.uid)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+
+        allow update: if isValidId(userId)
+          && isValidId(botConfigId)
+          && isOwner(userId)
+          && isValidBotCustomizationPreset(incoming(), request.auth.uid)
+          && incoming().ownerId == existing().ownerId
+          && incoming().botCode == existing().botCode
+          && incoming().bundleType == existing().bundleType
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'finishId', 'autonomyLevel', 'selectedEmployees', 'customDirectives', 'status', 'updatedAt'])
+          );
+
+        allow delete: if isValidId(userId) && isValidId(botConfigId) && isOwner(userId);
+      }
+    }
+  }
+}

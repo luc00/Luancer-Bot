@@ -1,0 +1,179 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Profilo operativo pubblico dell'utente proprietario senza PII sensibili.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID del proprietario."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Nome visualizzato dell'utente o referente aziendale."
+        },
+        "companyName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Ragione sociale dell'impresa configurata."
+        },
+        "activePlanId": {
+          "type": "string",
+          "enum": ["artigiano", "atelier", "corporate", "su_misura", "all_in_one"],
+          "description": "Piano o pacchetto bot attivo."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di creazione."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di ultimo aggiornamento."
+        }
+      },
+      "required": ["uid", "displayName", "companyName", "activePlanId", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Dati privati isolati (PII) accessibili esclusivamente al proprietario.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Indirizzo email verificato."
+        },
+        "vatNumber": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 32,
+          "description": "Partita IVA aziendale opzionale."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di creazione."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di aggiornamento."
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "BotCustomizationPreset": {
+      "title": "BotCustomizationPreset",
+      "description": "Configurazione personalizzata di un bot aziendale acquistato e dei relativi moduli.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "UID del proprietario del bot."
+        },
+        "botCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Codice identificativo del bot."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 120,
+          "description": "Nome personalizzato assegnato al bot."
+        },
+        "bundleType": {
+          "type": "string",
+          "enum": ["all_in_one", "modular"],
+          "description": "Tipologia di acquisto: bot unico completo o modulo singolo."
+        },
+        "finishId": {
+          "type": "string",
+          "enum": ["sage_brass", "charcoal_titanium", "brushed_gold", "ivory_ceramic"],
+          "description": "Finitura estetica 3D scelta per lo chassis."
+        },
+        "autonomyLevel": {
+          "type": "string",
+          "enum": ["supervisionato", "semi-autonomo", "piena-autonomia"],
+          "description": "Grado di autonomia operativa."
+        },
+        "selectedEmployees": {
+          "type": "array",
+          "description": "Elenco dei codici dipendente AI attivi nel bot (max 6).",
+          "maxLength": 6
+        },
+        "customDirectives": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000,
+          "description": "Direttive personalizzate e tono di voce."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["attivo", "in_pausa"],
+          "description": "Stato operativo del bot."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di creazione."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp server di aggiornamento."
+        }
+      },
+      "required": [
+        "ownerId",
+        "botCode",
+        "name",
+        "bundleType",
+        "finishId",
+        "autonomyLevel",
+        "selectedEmployees",
+        "customDirectives",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Profilo aziendale del proprietario autenticato."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Archivio PII isolato (email, P.IVA) accessibile solo al proprietario."
+    },
+    "/users/{userId}/botConfigs/{botConfigId}": {
+      "schema": { "$ref": "#/entities/BotCustomizationPreset" },
+      "description": "Configurazioni personalizzate dei bot acquistati dal cliente."
+    }
+  }
+}
