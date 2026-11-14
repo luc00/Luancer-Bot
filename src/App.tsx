@@ -38,6 +38,7 @@ import {
   SoftwareIntegration,
 } from './types/index.ts';
 import { useAuth } from './context/AuthContext.tsx';
+import { parseJsonResponse } from './utils/http.ts';
 
 const STORAGE_KEYS = {
   businessProfile: 'luancer_business_profile_v1',
@@ -60,7 +61,7 @@ function readStorageJson<T>(key: string, fallback: T): T {
 }
 
 export default function App() {
-  const { user, idToken, getFreshToken, syncBotPresetToFirestore } = useAuth();
+  const { user, idToken, authError, clearAuthError, getFreshToken, syncBotPresetToFirestore } = useAuth();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('studio');
   const [businessProfile, setBusinessProfile] = useState<BusinessProfile>(() => {
@@ -163,7 +164,10 @@ export default function App() {
           headers: { Authorization: `Bearer ${idToken}` },
         });
         if (!res.ok || cancelled) return;
-        const data = await res.json();
+        const data = await parseJsonResponse<{
+          user?: Record<string, unknown>;
+          bots?: Record<string, unknown>[];
+        }>(res);
 
         if (data.user && !cancelled) {
           const srvUser = data.user as Record<string, unknown>;
@@ -401,7 +405,7 @@ export default function App() {
             body: JSON.stringify(draft),
           });
           if (res.ok) {
-            const payload = await res.json();
+            const payload = await parseJsonResponse<{ bot?: { id?: number | string } }>(res);
             if (payload.bot?.id) {
               createdBot = {
                 ...createdBot,
@@ -722,6 +726,25 @@ export default function App() {
         setActiveTab={setActiveTab}
         onOpenCreateModal={handleOpenCreateModal}
       />
+
+      {authError && (
+        <div
+          role="alert"
+          data-testid="auth-error-banner"
+          className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-4"
+        >
+          <div className="rounded-lg border border-[#c48d7a]/60 bg-[#fdf2f0] px-4 py-2.5 text-xs text-[#7c3525] flex items-center justify-between gap-3">
+            <span>{authError}</span>
+            <button
+              type="button"
+              onClick={clearAuthError}
+              className="font-semibold underline shrink-0"
+            >
+              Chiudi
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1">
         {/* Hero Section shown on primary landing / workspace tab */}

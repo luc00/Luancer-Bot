@@ -20,6 +20,7 @@ import {
   db,
   googleAuthProvider,
   handleFirestoreError,
+  isFirebaseConfigured,
   OperationType,
 } from '../lib/firebase.ts';
 
@@ -42,11 +43,13 @@ interface AuthContextValue {
   authReady: boolean;
   isSigningIn: boolean;
   authError: string | null;
+  isFirebaseAvailable: boolean;
   cloudPresets: FirestoreBotPreset[];
   signInWithGoogle: () => Promise<User | null>;
   signOutUser: () => Promise<void>;
   getFreshToken: () => Promise<string | null>;
   syncBotPresetToFirestore: (preset: Omit<FirestoreBotPreset, 'ownerId'>) => Promise<void>;
+  clearAuthError: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -60,6 +63,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [cloudPresets, setCloudPresets] = useState<FirestoreBotPreset[]>([]);
 
   const ensureUserDocs = useCallback(async (u: User) => {
+    if (!db) return;
     const publicPath = `users/${u.uid}`;
     const privatePath = `users/${u.uid}/private/info`;
     try {
@@ -102,6 +106,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
+    if (!isFirebaseConfigured || !auth) {
+      setUser(null);
+      setIdToken(null);
+      setCloudPresets([]);
+      setAuthReady(true);
+      return;
+    }
+
     const unsub = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
       if (nextUser) {
@@ -124,7 +136,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Real-time Firestore listener for user's customized bot presets
   useEffect(() => {
-    if (!authReady || !user) return;
+    if (!authReady || !user || !db) return;
 
     const colPath = `users/${user.uid}/botConfigs`;
     const q = query(collection(db, colPath), where('ownerId', '==', user.uid));
@@ -159,6 +171,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [authReady, user]);
 
   const signInWithGoogle = useCallback(async () => {
+    if (!isFirebaseConfigured || !auth || !googleAuthProvider) {
+      setAuthError(
+        'Accesso Google non ancora configurato su questo host: imposta le variabili VITE_FIREBASE_* nelle impostazioni del progetto Vercel.'
+      );
+      return null;
+    }
+
     setIsSigningIn(true);
     setAuthError(null);
     try {
@@ -177,13 +196,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [ensureUserDocs]);
 
   const signOutUser = useCallback(async () => {
-    await signOut(auth);
+    if (auth) {
+      await signOut(auth);
+    }
     setIdToken(null);
     setCloudPresets([]);
   }, []);
 
   const getFreshToken = useCallback(async () => {
-    if (!auth.currentUser) return null;
+    if (!auth?.currentUser) return null;
     const token = await auth.currentUser.getIdToken();
     setIdToken(token);
     return token;
@@ -191,7 +212,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const syncBotPresetToFirestore = useCallback(
     async (preset: Omit<FirestoreBotPreset, 'ownerId'>) => {
-      if (!auth.currentUser) return;
+      if (!db || !auth?.currentUser) return;
       const uid = auth.currentUser.uid;
       const safeDocId = preset.id.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 128);
       const docPath = `users/${uid}/botConfigs/${safeDocId}`;
@@ -216,6 +237,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     []
   );
 
+  const clearAuthError = useCallback(() => {
+    setAuthError(null);
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -224,11 +249,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authReady,
         isSigningIn,
         authError,
+        isFirebaseAvailable: isFirebaseConfigured,
         cloudPresets,
         signInWithGoogle,
         signOutUser,
         getFreshToken,
         syncBotPresetToFirestore,
+        clearAuthError,
       }}
     >
       {children}

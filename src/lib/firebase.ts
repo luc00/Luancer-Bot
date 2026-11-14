@@ -1,55 +1,62 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { initializeApp, type FirebaseApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, type Auth } from 'firebase/auth';
+import { getFirestore, doc, getDocFromServer, type Firestore } from 'firebase/firestore';
+import {
+  resolveFirebaseConfigFromSources,
+  type FirebaseAppletConfig,
+} from './firebaseConfigResolver.ts';
 
-interface FirebaseAppletConfig {
-  projectId: string;
-  appId: string;
-  apiKey: string;
-  authDomain: string;
-  firestoreDatabaseId?: string;
-  storageBucket?: string;
-  messagingSenderId?: string;
-}
-
-function loadFirebaseConfig(): FirebaseAppletConfig {
-  const envConfig: Partial<FirebaseAppletConfig> = {
-    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-    appId: import.meta.env.VITE_FIREBASE_APP_ID,
-    firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID,
-  };
-
-  if (envConfig.apiKey && envConfig.projectId && envConfig.appId && envConfig.authDomain) {
-    return envConfig as FirebaseAppletConfig;
+function loadFirebaseConfig(): FirebaseAppletConfig | null {
+  try {
+    const localModules = import.meta.glob<{ default: Partial<FirebaseAppletConfig> }>(
+      '/firebase-applet-config.json',
+      { eager: true }
+    );
+    return resolveFirebaseConfigFromSources(
+      {
+        VITE_FIREBASE_API_KEY: import.meta.env.VITE_FIREBASE_API_KEY,
+        VITE_FIREBASE_AUTH_DOMAIN: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+        VITE_FIREBASE_PROJECT_ID: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+        VITE_FIREBASE_STORAGE_BUCKET: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+        VITE_FIREBASE_MESSAGING_SENDER_ID: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+        VITE_FIREBASE_APP_ID: import.meta.env.VITE_FIREBASE_APP_ID,
+        VITE_FIREBASE_FIRESTORE_DATABASE_ID: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID,
+      },
+      localModules
+    );
+  } catch {
+    return null;
   }
-
-  // Optional local AI Studio config (gitignored for repository safety)
-  const localModules = import.meta.glob<{ default: FirebaseAppletConfig }>(
-    '/firebase-applet-config.json',
-    { eager: true }
-  );
-  const localConfig = localModules['/firebase-applet-config.json']?.default;
-  if (localConfig?.apiKey && localConfig?.projectId) {
-    return localConfig;
-  }
-
-  throw new Error(
-    'Configurazione Firebase mancante. Imposta le variabili VITE_FIREBASE_* in .env oppure configura firebase-applet-config.json in locale.'
-  );
 }
 
 const firebaseConfig = loadFirebaseConfig();
-const app = initializeApp(firebaseConfig);
 
-export const db = firebaseConfig.firestoreDatabaseId
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
-  : getFirestore(app);
-export const auth = getAuth(app);
-export const googleAuthProvider = new GoogleAuthProvider();
+let appInstance: FirebaseApp | null = null;
+let dbInstance: Firestore | null = null;
+let authInstance: Auth | null = null;
+let providerInstance: GoogleAuthProvider | null = null;
+
+if (firebaseConfig) {
+  try {
+    appInstance = initializeApp(firebaseConfig);
+    dbInstance = firebaseConfig.firestoreDatabaseId
+      ? getFirestore(appInstance, firebaseConfig.firestoreDatabaseId)
+      : getFirestore(appInstance);
+    authInstance = getAuth(appInstance);
+    providerInstance = new GoogleAuthProvider();
+  } catch (err) {
+    console.warn('Firebase initialization skipped:', err);
+    appInstance = null;
+    dbInstance = null;
+    authInstance = null;
+    providerInstance = null;
+  }
+}
+
+export const isFirebaseConfigured = Boolean(appInstance && dbInstance && authInstance);
+export const db: Firestore | null = dbInstance;
+export const auth: Auth | null = authInstance;
+export const googleAuthProvider: GoogleAuthProvider | null = providerInstance;
 
 export enum OperationType {
   CREATE = 'create',
@@ -82,16 +89,17 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ): never {
+  const currentUser = authInstance?.currentUser;
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
+      userId: currentUser?.uid,
+      email: currentUser?.email,
+      emailVerified: currentUser?.emailVerified,
+      isAnonymous: currentUser?.isAnonymous,
+      tenantId: currentUser?.tenantId,
       providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
+        currentUser?.providerData?.map((provider) => ({
           providerId: provider.providerId,
           email: provider.email,
         })) || [],
@@ -104,8 +112,9 @@ export function handleFirestoreError(
 }
 
 async function testConnection() {
+  if (!dbInstance) return;
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(dbInstance, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error('Please check your Firebase configuration.');
@@ -113,4 +122,6 @@ async function testConnection() {
   }
 }
 
-void testConnection();
+if (dbInstance) {
+  void testConnection();
+}

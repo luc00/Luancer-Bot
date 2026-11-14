@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BusinessProfile, MarketResearchResult } from '../types/index.ts';
 import { Search, Globe, ExternalLink, Loader2, ArrowRight, Check } from 'lucide-react';
+import { parseJsonResponse } from '../utils/http.ts';
 
 interface MarketAnalystPanelProps {
   businessProfile?: BusinessProfile;
@@ -64,7 +65,7 @@ export const MarketAnalystPanel: React.FC<MarketAnalystPanelProps> = ({
         }),
       });
 
-      const data = await res.json();
+      const data = await parseJsonResponse<MarketResearchResult & { error?: string }>(res);
       if (!res.ok) {
         throw new Error(data.error || 'Impossibile completare la ricerca di mercato.');
       }

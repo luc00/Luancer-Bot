@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { BusinessProfile, DomainVerificationMethod } from '../types/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
+import { parseJsonResponse } from '../utils/http.ts';
 
 interface DomainVerificationCardProps {
   businessProfile: BusinessProfile;
@@ -210,9 +211,16 @@ export const DomainVerificationCard: React.FC<DomainVerificationCardProps> = ({
           ownerName: businessProfile.ownerName,
         }),
       });
-      const data = await res.json();
+      const data = await parseJsonResponse<{
+        error?: string;
+        domain?: string;
+        normalizedUrl?: string;
+        method?: DomainVerificationMethod;
+        token?: string;
+        challengeSignature?: string;
+      }>(res);
 
-      if (!res.ok) {
+      if (!res.ok || !data.domain || !data.normalizedUrl || !data.method || !data.token || !data.challengeSignature) {
         setFeedback({
           type: 'error',
           message: data.error || 'Impossibile generare il codice di verifica per questo indirizzo.',
@@ -232,10 +240,13 @@ export const DomainVerificationCard: React.FC<DomainVerificationCardProps> = ({
         type: 'info',
         message: `Codice generato per "${data.domain}". Pubblicalo sul tuo sito o DNS, poi clicca "Verifica Proprietà Sito".`,
       });
-    } catch {
+    } catch (err) {
       setFeedback({
         type: 'error',
-        message: 'Errore di rete durante la generazione della sfida di verifica.',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Errore di rete durante la generazione della sfida di verifica.',
       });
     } finally {
       setIsGenerating(false);
@@ -262,9 +273,16 @@ export const DomainVerificationCard: React.FC<DomainVerificationCardProps> = ({
           challengeSignature,
         }),
       });
-      const data = await res.json();
+      const data = await parseJsonResponse<{
+        verified?: boolean;
+        domain?: string;
+        method?: DomainVerificationMethod;
+        checkedAt?: string;
+        message?: string;
+        checkedTargets?: string[];
+      }>(res);
 
-      if (data.verified) {
+      if (data.verified && data.domain && data.method) {
         onDomainVerified({
           verified: true,
           domain: data.domain,
@@ -287,10 +305,13 @@ export const DomainVerificationCard: React.FC<DomainVerificationCardProps> = ({
           checkedTargets: Array.isArray(data.checkedTargets) ? data.checkedTargets : undefined,
         });
       }
-    } catch {
+    } catch (err) {
       setFeedback({
         type: 'error',
-        message: 'Errore durante la verifica sul server. Controlla la connessione e riprova.',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Errore durante la verifica sul server. Controlla la connessione e riprova.',
       });
     } finally {
       setIsVerifying(false);
