@@ -25,11 +25,40 @@ import {
   isPrivateOrReservedIp,
   verifyDomainOwnershipWithProviders,
 } from './src/utils/domainVerification.ts';
+import {
+  createSlidingWindowLimiter,
+  validateBotPurchaseInput,
+  sanitizeBotPatchInput,
+  resolveAuthoritativePlanMonthlyPrice,
+} from './src/utils/security.ts';
 import { DomainVerificationMethod } from './src/types/index.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 const DOMAIN_HMAC_SECRET =
-  process.env.DOMAIN_VERIFY_SECRET || process.env.GEMINI_API_KEY || 'luancer-domain-hmac-dev-key';
+  process.env.DOMAIN_VERIFY_SECRET || crypto.randomBytes(32).toString('hex');
+
+const domainCheckLimiter = createSlidingWindowLimiter({
+  maxRequests: 25,
+  windowMs: 10 * 60 * 1000,
+});
+const marketResearchLimiter = createSlidingWindowLimiter({
+  maxRequests: 15,
+  windowMs: 10 * 60 * 1000,
+});
+const purchaseLimiter = createSlidingWindowLimiter({
+  maxRequests: 20,
+  windowMs: 10 * 60 * 1000,
+});
+
+function getClientKey(req: express.Request): string {
+  const fwd = req.headers['x-forwarded-for'];
+  const firstIp = Array.isArray(fwd)
+    ? fwd[0]
+    : typeof fwd === 'string'
+      ? fwd.split(',')[0]
+      : '';
+  return (firstIp || req.ip || 'unknown').trim();
+}
 
 function signChallengePayload(domain: string, method: string, token: string): string {
   return crypto
@@ -112,7 +141,18 @@ const ai = process.env.GEMINI_API_KEY
 
 async function startServer() {
   const app = express();
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '1mb' }));
+
+  // Baseline HTTP security headers (iframe-compatible for AI Studio preview + Google OAuth popup)
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    next();
+  });
 
   // Healthcheck
   app.get('/api/health', (_req, res) => {
@@ -139,56 +179,37 @@ async function startServer() {
   app.post('/api/bots/purchase', requireAuth, async (req: AuthRequest, res) => {
     try {
       const uid = req.user!.uid;
+      const limitCheck = purchaseLimiter.check(uid);
+      if (!limitCheck.allowed) {
+        res.setHeader('Retry-After', String(limitCheck.retryAfterSeconds));
+        return res.status(429).json({ error: 'Troppe richieste di acquisto ravvicinate. Riprova tra qualche istante.' });
+      }
+
       const email = req.user!.email || `${uid}@luancer.local`;
       const displayName = typeof req.user!.name === 'string' ? req.user!.name : undefined;
 
       await getOrCreateUser(uid, email, displayName);
 
-      const {
-        botCode,
-        name,
-        bundleType,
-        billingCycle,
-        priceEur,
-        autonomyLevel,
-        finishId,
-        selectedEmployees,
-        moduleConfigs,
-        guardrails,
-        customDirectives,
-        connectedSoftware,
-      } = req.body ?? {};
-
-      if (!name || typeof name !== 'string' || !Array.isArray(selectedEmployees) || selectedEmployees.length === 0) {
-        return res.status(400).json({ error: 'Dati del bot incompleti: specifica nome e almeno un modulo dipendente.' });
+      const validation = validateBotPurchaseInput(req.body);
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
       }
 
-      const safePrice = typeof priceEur === 'number' && priceEur > 0 ? Math.round(priceEur) : 199;
-      const safeBundle = bundleType === 'all_in_one' ? 'all_in_one' : 'modular';
-      const safeCycle = billingCycle === 'monthly' ? 'monthly' : 'annual';
-
+      const data = validation.data;
       const createdBot = await createPurchasedBot({
         userUid: uid,
-        botCode: typeof botCode === 'string' && botCode.trim() ? botCode.trim() : `BOT-${Date.now().toString().slice(-4)}`,
-        name: name.trim().slice(0, 120),
-        bundleType: safeBundle,
-        billingCycle: safeCycle,
-        priceEur: safePrice,
-        autonomyLevel: typeof autonomyLevel === 'string' ? autonomyLevel : 'semi-autonomo',
-        finishId: typeof finishId === 'string' ? finishId : 'sage_brass',
-        selectedEmployees: selectedEmployees.slice(0, 6),
-        moduleConfigs: moduleConfigs && typeof moduleConfigs === 'object' ? moduleConfigs : {},
-        guardrails:
-          guardrails && typeof guardrails === 'object'
-            ? guardrails
-            : {
-                priorities: 'Conferma settimanale delle 3 priorità dal titolare',
-                decisions: 'Analisi AI preparata, scelta finale al titolare',
-                relationships: 'Trattative strategiche e reclami critici gestiti dal titolare',
-                qualityControl: 'Revisione rapida output prima della pubblicazione',
-              },
-        customDirectives: typeof customDirectives === 'string' ? customDirectives.slice(0, 2000) : '',
-        connectedSoftware: Array.isArray(connectedSoftware) ? connectedSoftware.slice(0, 12) : ['Zucchetti'],
+        botCode: data.botCode,
+        name: data.name,
+        bundleType: data.bundleType,
+        billingCycle: data.billingCycle,
+        priceEur: data.authoritativePriceEur,
+        autonomyLevel: data.autonomyLevel,
+        finishId: data.finishId,
+        selectedEmployees: data.selectedEmployees,
+        moduleConfigs: data.moduleConfigs as any,
+        guardrails: data.guardrails,
+        customDirectives: data.customDirectives,
+        connectedSoftware: data.connectedSoftware,
       });
 
       await recordUserTransaction({
@@ -196,8 +217,8 @@ async function startServer() {
         docNumber: `ORD-${new Date().getFullYear()}/${createdBot.id}`,
         clientOrVendor: email,
         recordType: 'abbonamento',
-        description: `Attivazione ${createdBot.name} (${safeCycle === 'annual' ? 'Annuale' : 'Mensile'})`,
-        amountGrossEur: Math.round(safePrice * 1.22 * 100) / 100,
+        description: `Attivazione ${createdBot.name} (${data.billingCycle === 'annual' ? 'Annuale' : 'Mensile'})`,
+        amountGrossEur: Math.round(data.authoritativePriceEur * 1.22 * 100) / 100,
         direction: 'entrata',
         status: 'saldato',
       });
@@ -218,23 +239,9 @@ async function startServer() {
       }
 
       const uid = req.user!.uid;
-      const allowedUpdates: Record<string, unknown> = {};
-      const fields = [
-        'name',
-        'autonomyLevel',
-        'finishId',
-        'selectedEmployees',
-        'moduleConfigs',
-        'guardrails',
-        'customDirectives',
-        'connectedSoftware',
-        'status',
-      ] as const;
-
-      for (const field of fields) {
-        if (req.body && req.body[field] !== undefined) {
-          allowedUpdates[field] = req.body[field];
-        }
+      const allowedUpdates = sanitizeBotPatchInput(req.body);
+      if (Object.keys(allowedUpdates).length === 0) {
+        return res.status(400).json({ error: 'Nessun campo valido specificato per l\'aggiornamento.' });
       }
 
       const updated = await updatePurchasedBot(id, uid, allowedUpdates);
@@ -278,22 +285,35 @@ async function startServer() {
 
       await getOrCreateUser(uid, email, name);
 
-      const { planId, billingCycle, monthlyEur, companyName } = req.body ?? {};
-      if (!planId || typeof planId !== 'string') {
+      const { planId, billingCycle, companyName } = req.body ?? {};
+      const safeCycle = billingCycle === 'monthly' ? 'monthly' : 'annual';
+      const authoritativeMonthlyEur =
+        typeof planId === 'string'
+          ? resolveAuthoritativePlanMonthlyPrice(planId, safeCycle)
+          : null;
+
+      if (authoritativeMonthlyEur === null) {
         return res.status(400).json({ error: 'Piano selezionato non valido.' });
       }
 
-      const safeCycle = billingCycle === 'monthly' ? 'monthly' : 'annual';
-      const user = await updateUserPlan(uid, planId, safeCycle, typeof companyName === 'string' ? companyName : undefined);
+      const user = await updateUserPlan(
+        uid,
+        planId,
+        safeCycle,
+        typeof companyName === 'string' ? companyName.trim().slice(0, 120) : undefined
+      );
 
-      if (typeof monthlyEur === 'number' && monthlyEur > 0) {
+      if (authoritativeMonthlyEur > 0) {
         await recordUserTransaction({
           userUid: uid,
           docNumber: `SUB-${new Date().getFullYear()}/${Date.now().toString().slice(-4)}`,
           clientOrVendor: email,
           recordType: 'abbonamento',
           description: `Piano aziendale ${planId} (${safeCycle === 'annual' ? 'Annuale' : 'Mensile'})`,
-          amountGrossEur: Math.round(monthlyEur * (safeCycle === 'annual' ? 12 : 1) * 1.22 * 100) / 100,
+          amountGrossEur:
+            Math.round(
+              authoritativeMonthlyEur * (safeCycle === 'annual' ? 12 : 1) * 1.22 * 100
+            ) / 100,
           direction: 'entrata',
           status: 'saldato',
         });
@@ -354,6 +374,15 @@ async function startServer() {
   // Generate domain ownership verification challenge bound to owner & domain
   app.post('/api/domain/challenge', optionalAuth, async (req: AuthRequest, res) => {
     try {
+      const rateKey = `dom:${req.user?.uid || getClientKey(req)}`;
+      const limitCheck = domainCheckLimiter.check(rateKey);
+      if (!limitCheck.allowed) {
+        res.setHeader('Retry-After', String(limitCheck.retryAfterSeconds));
+        return res.status(429).json({
+          error: 'Troppi tentativi di verifica dominio. Attendi qualche minuto prima di riprovare.',
+        });
+      }
+
       const { websiteUrl, method, ownerName } = req.body ?? {};
       const norm = normalizeCompanyDomain(typeof websiteUrl === 'string' ? websiteUrl : '');
       if (!norm.valid) {
@@ -407,6 +436,16 @@ async function startServer() {
   // Verify real ownership of the client's website via DNS TXT, HTML meta tag, or .well-known file
   app.post('/api/domain/verify', optionalAuth, async (req: AuthRequest, res) => {
     try {
+      const rateKey = `dom:${req.user?.uid || getClientKey(req)}`;
+      const limitCheck = domainCheckLimiter.check(rateKey);
+      if (!limitCheck.allowed) {
+        res.setHeader('Retry-After', String(limitCheck.retryAfterSeconds));
+        return res.status(429).json({
+          verified: false,
+          message: 'Troppi tentativi di controllo DNS/HTTP. Riprova tra qualche minuto.',
+        });
+      }
+
       const { websiteUrl, method, token, challengeSignature } = req.body ?? {};
       const norm = normalizeCompanyDomain(typeof websiteUrl === 'string' ? websiteUrl : '');
       if (!norm.valid) {
@@ -480,6 +519,14 @@ async function startServer() {
   // Dipendente 1: Analista di Mercato Live with Gemini Google Search Grounding
   app.post('/api/market-research', async (req, res) => {
     try {
+      const limitCheck = marketResearchLimiter.check(`mr:${getClientKey(req)}`);
+      if (!limitCheck.allowed) {
+        res.setHeader('Retry-After', String(limitCheck.retryAfterSeconds));
+        return res.status(429).json({
+          error: 'Limite richieste analisi di mercato raggiunto. Attendi qualche minuto e riprova.',
+        });
+      }
+
       const { sector, focus, companyIdea } = req.body ?? {};
       if (!sector || typeof sector !== 'string' || sector.trim().length < 2) {
         return res.status(400).json({ error: 'Inserisci un settore aziendale valido da analizzare.' });

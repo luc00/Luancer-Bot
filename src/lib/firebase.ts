@@ -1,11 +1,53 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
 
+interface FirebaseAppletConfig {
+  projectId: string;
+  appId: string;
+  apiKey: string;
+  authDomain: string;
+  firestoreDatabaseId?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+}
+
+function loadFirebaseConfig(): FirebaseAppletConfig {
+  const envConfig: Partial<FirebaseAppletConfig> = {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID,
+  };
+
+  if (envConfig.apiKey && envConfig.projectId && envConfig.appId && envConfig.authDomain) {
+    return envConfig as FirebaseAppletConfig;
+  }
+
+  // Optional local AI Studio config (gitignored for repository safety)
+  const localModules = import.meta.glob<{ default: FirebaseAppletConfig }>(
+    '/firebase-applet-config.json',
+    { eager: true }
+  );
+  const localConfig = localModules['/firebase-applet-config.json']?.default;
+  if (localConfig?.apiKey && localConfig?.projectId) {
+    return localConfig;
+  }
+
+  throw new Error(
+    'Configurazione Firebase mancante. Imposta le variabili VITE_FIREBASE_* in .env oppure configura firebase-applet-config.json in locale.'
+  );
+}
+
+const firebaseConfig = loadFirebaseConfig();
 const app = initializeApp(firebaseConfig);
 
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = firebaseConfig.firestoreDatabaseId
+  ? getFirestore(app, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(app);
 export const auth = getAuth(app);
 export const googleAuthProvider = new GoogleAuthProvider();
 
